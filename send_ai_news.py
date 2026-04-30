@@ -13,12 +13,18 @@ TO_EMAIL     = os.environ["TO_EMAIL"]
 GEMINI_KEY   = os.environ["GEMINI_API_KEY"]
 
 RSS_FEEDS = [
+    # 주요 AI 언론 (빅이슈 파악용)
     ("TechCrunch AI",   "https://techcrunch.com/category/artificial-intelligence/feed/"),
     ("VentureBeat AI",  "https://venturebeat.com/category/ai/feed/"),
     ("The Verge AI",    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"),
     ("MIT Tech Review", "https://www.technologyreview.com/feed/"),
     ("Wired AI",        "https://www.wired.com/feed/category/artificial-intelligence/latest/rss"),
     ("AI News",         "https://artificialintelligence-news.com/feed/"),
+    ("Ars Technica AI", "https://feeds.arstechnica.com/arstechnica/index"),
+    # AI 기업 공식 블로그 (신규기능 파악용)
+    ("Google AI Blog",  "https://blog.google/technology/ai/rss/"),
+    ("DeepMind",        "https://deepmind.google/discover/blog/rss.xml"),
+    ("Hugging Face",    "https://huggingface.co/blog/feed.xml"),
 ]
 
 KST = timezone(timedelta(hours=9))
@@ -76,22 +82,35 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 
     prompt = f"""
 다음은 {today} 아침 기준 지난 12시간 동안의 AI 관련 뉴스입니다.
-각 뉴스를 한국어로 요약해서 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
+한국어로 요약하되 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 
 {{
   "trend_summary": "오늘의 AI 트렌드 종합 정리 (3문장)",
-  "articles": [
+  "big_issues": [
     {{
-      "number": 1,
+      "rank": 1,
       "title": "한국어 제목",
       "source": "출처명",
       "pub": "발행시간",
       "link": "URL",
-      "summary": "2~3문장 핵심 요약",
-      "category": "카테고리 (모델/서비스/연구/규제/산업 중 하나)"
+      "summary": "2~3문장 핵심 요약 (왜 많은 언론이 주목하는지 포함)"
+    }}
+  ],
+  "new_features": [
+    {{
+      "company": "회사명 (예: OpenAI, Google, Anthropic, Meta 등)",
+      "title": "한국어 제목",
+      "source": "출처명",
+      "pub": "발행시간",
+      "link": "URL",
+      "summary": "2~3문장 신규기능 핵심 요약"
     }}
   ]
 }}
+
+규칙:
+- big_issues: 여러 언론에서 동시에 다루는 AI 빅이슈 상위 3개만 선정
+- new_features: Claude Code, OpenAI, Google Gemini, Meta AI 등 주요 AI 서비스/툴의 신규 기능 발표 기사만 선정 (없으면 빈 배열)
 
 뉴스 목록:
 {news_text}
@@ -123,30 +142,28 @@ def category_color(cat: str) -> str:
 
 # ── 타임지 스타일 HTML 빌드 ────────────────────────────
 def build_html(data: dict, article_count: int) -> str:
-    today    = datetime.now(tz=KST).strftime("%B %d, %Y").upper()
-    weekday  = datetime.now(tz=KST).strftime("%A").upper()
-    trend    = data.get("trend_summary", "")
-    articles = data.get("articles", [])
+    today       = datetime.now(tz=KST).strftime("%B %d, %Y").upper()
+    weekday     = datetime.now(tz=KST).strftime("%A").upper()
+    trend       = data.get("trend_summary", "")
+    big_issues  = data.get("big_issues", [])
+    new_features= data.get("new_features", [])
 
-    # 헤드라인 (첫 번째 기사)
-    headline_html = ""
-    if articles:
-        h = articles[0]
-        col = category_color(h.get("category", ""))
-        headline_html = f"""
+    # ── 빅이슈 TOP 3 헤드라인 (1위) + 카드 (2·3위)
+    big_headline_html = ""
+    if big_issues:
+        h = big_issues[0]
+        big_headline_html = f"""
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td style="padding:0 0 8px 0;">
-              <span style="background:{col};color:#fff;font-size:10px;font-weight:700;
-                           letter-spacing:1.5px;padding:3px 10px;text-transform:uppercase;">
-                {h.get('category','NEWS')}
-              </span>
+              <span style="background:#b22222;color:#fff;font-size:11px;font-weight:700;
+                           letter-spacing:1.5px;padding:4px 12px;">🔥 TOP 1</span>
             </td>
           </tr>
           <tr>
             <td>
               <a href="{h['link']}" style="text-decoration:none;color:#1a1a1a;">
-                <div style="font-family:Georgia,serif;font-size:28px;font-weight:700;
+                <div style="font-family:Georgia,serif;font-size:26px;font-weight:700;
                             line-height:1.25;color:#1a1a1a;margin:0 0 12px 0;">
                   {h['title']}
                 </div>
@@ -154,7 +171,7 @@ def build_html(data: dict, article_count: int) -> str:
             </td>
           </tr>
           <tr>
-            <td style="font-size:15px;color:#444;line-height:1.7;
+            <td style="font-size:14px;color:#444;line-height:1.75;
                        font-family:Georgia,serif;padding:0 0 12px 0;">
               {h['summary']}
             </td>
@@ -165,27 +182,22 @@ def build_html(data: dict, article_count: int) -> str:
               {h['source']} &nbsp;·&nbsp; {h['pub']}
             </td>
           </tr>
-        </table>
-        """
+        </table>"""
 
-    # 나머지 기사 카드
-    cards_html = ""
-    for a in articles[1:]:
-        col = category_color(a.get("category", ""))
-        cards_html += f"""
+    big_cards_html = ""
+    for a in big_issues[1:]:
+        rank = a.get("rank", "")
+        big_cards_html += f"""
         <table width="100%" cellpadding="0" cellspacing="0"
                style="border-bottom:1px solid #ececec;margin-bottom:20px;padding-bottom:20px;">
           <tr>
-            <td width="4" style="background:{col};border-radius:2px;" valign="top">
-              &nbsp;
-            </td>
+            <td width="4" style="background:#b22222;border-radius:2px;" valign="top">&nbsp;</td>
             <td width="16">&nbsp;</td>
             <td>
               <div style="margin-bottom:5px;">
-                <span style="background:{col};color:#fff;font-size:9px;font-weight:700;
-                             letter-spacing:1px;padding:2px 7px;text-transform:uppercase;
-                             border-radius:2px;">
-                  {a.get('category','NEWS')}
+                <span style="background:#b22222;color:#fff;font-size:9px;font-weight:700;
+                             letter-spacing:1px;padding:2px 8px;border-radius:2px;">
+                  🔥 TOP {rank}
                 </span>
                 <span style="color:#999;font-size:11px;margin-left:8px;font-family:Arial,sans-serif;">
                   {a['source']} · {a['pub']}
@@ -197,14 +209,64 @@ def build_html(data: dict, article_count: int) -> str:
                   {a['title']}
                 </div>
               </a>
-              <div style="font-size:13px;color:#555;line-height:1.65;
-                          font-family:Arial,sans-serif;">
+              <div style="font-size:13px;color:#555;line-height:1.65;font-family:Arial,sans-serif;">
                 {a['summary']}
               </div>
             </td>
           </tr>
-        </table>
-        """
+        </table>"""
+
+    # ── 신규기능 카드
+    feature_cards_html = ""
+    for a in new_features:
+        company = a.get("company", "AI")
+        feature_cards_html += f"""
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-bottom:1px solid #ececec;margin-bottom:20px;padding-bottom:20px;">
+          <tr>
+            <td width="4" style="background:#2980b9;border-radius:2px;" valign="top">&nbsp;</td>
+            <td width="16">&nbsp;</td>
+            <td>
+              <div style="margin-bottom:5px;">
+                <span style="background:#2980b9;color:#fff;font-size:9px;font-weight:700;
+                             letter-spacing:1px;padding:2px 8px;border-radius:2px;">
+                  🚀 {company}
+                </span>
+                <span style="color:#999;font-size:11px;margin-left:8px;font-family:Arial,sans-serif;">
+                  {a['source']} · {a['pub']}
+                </span>
+              </div>
+              <a href="{a['link']}" style="text-decoration:none;color:#1a1a1a;">
+                <div style="font-family:Georgia,serif;font-size:17px;font-weight:700;
+                            line-height:1.35;color:#1a1a1a;margin:0 0 7px 0;">
+                  {a['title']}
+                </div>
+              </a>
+              <div style="font-size:13px;color:#555;line-height:1.65;font-family:Arial,sans-serif;">
+                {a['summary']}
+              </div>
+            </td>
+          </tr>
+        </table>"""
+
+    features_section = ""
+    if feature_cards_html:
+        features_section = f"""
+    <!-- 구분선: 신규기능 -->
+    <tr>
+      <td style="padding:8px 32px 0;">
+        <div style="font-family:Arial,sans-serif;font-size:10px;font-weight:700;
+                    letter-spacing:2px;color:#2980b9;border-bottom:2px solid #2980b9;
+                    padding-bottom:6px;margin-bottom:20px;">
+          🚀 최신 AI 신규기능
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0 32px 24px;">
+        {feature_cards_html}
+      </td>
+    </tr>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -217,12 +279,11 @@ def build_html(data: dict, article_count: int) -> str:
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f2f2f0;">
 <tr><td align="center" style="padding:24px 16px;">
 
-  <!-- 전체 컨테이너 -->
   <table width="660" cellpadding="0" cellspacing="0"
          style="max-width:660px;width:100%;background:#fff;
                 box-shadow:0 1px 6px rgba(0,0,0,.12);">
 
-    <!-- ① 최상단 날짜 바 -->
+    <!-- ① 날짜 바 -->
     <tr>
       <td style="background:#1a1a1a;padding:8px 32px;">
         <table width="100%" cellpadding="0" cellspacing="0">
@@ -230,9 +291,7 @@ def build_html(data: dict, article_count: int) -> str:
             <td style="color:#ccc;font-size:10px;font-family:Arial,sans-serif;
                        letter-spacing:1px;">{weekday}, {today}</td>
             <td align="right" style="color:#ccc;font-size:10px;
-                font-family:Arial,sans-serif;letter-spacing:1px;">
-              AI NEWS BRIEFING
-            </td>
+                font-family:Arial,sans-serif;letter-spacing:1px;">AI NEWS BRIEFING</td>
           </tr>
         </table>
       </td>
@@ -255,54 +314,36 @@ def build_html(data: dict, article_count: int) -> str:
       </td>
     </tr>
 
-    <!-- ③ 오늘의 트렌드 요약 -->
+    <!-- ③ 트렌드 요약 -->
     <tr>
       <td style="background:#fdf6e3;border-top:3px solid #b22222;
                  border-bottom:1px solid #e0d8c0;padding:18px 32px;">
         <div style="font-family:Arial,sans-serif;font-size:10px;font-weight:700;
-                    letter-spacing:2px;color:#b22222;margin-bottom:8px;">
-          TODAY'S TREND
-        </div>
+                    letter-spacing:2px;color:#b22222;margin-bottom:8px;">TODAY'S TREND</div>
         <div style="font-family:Georgia,serif;font-size:14px;color:#333;line-height:1.75;">
           {trend}
         </div>
       </td>
     </tr>
 
-    <!-- ④ 헤드라인 기사 -->
+    <!-- ④ 빅이슈 TOP 3 -->
     <tr>
       <td style="padding:28px 32px 0;">
         <div style="font-family:Arial,sans-serif;font-size:10px;font-weight:700;
                     letter-spacing:2px;color:#b22222;border-bottom:2px solid #b22222;
                     padding-bottom:6px;margin-bottom:20px;">
-          HEADLINE
+          🔥 AI 빅이슈 TOP 3
         </div>
-        {headline_html}
+        {big_headline_html}
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:16px 32px 0;">
+        {big_cards_html}
       </td>
     </tr>
 
-    <!-- ⑤ 구분선 -->
-    <tr>
-      <td style="padding:16px 32px;">
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr>
-            <td style="border-top:1px solid #ccc;"></td>
-            <td width="12"></td>
-            <td style="font-family:Arial,sans-serif;font-size:10px;color:#999;
-                       letter-spacing:2px;white-space:nowrap;">MORE STORIES</td>
-            <td width="12"></td>
-            <td style="border-top:1px solid #ccc;"></td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-
-    <!-- ⑥ 나머지 기사 -->
-    <tr>
-      <td style="padding:0 32px 24px;">
-        {cards_html}
-      </td>
-    </tr>
+    {features_section}
 
     <!-- ⑦ 푸터 -->
     <tr>
@@ -313,7 +354,7 @@ def build_html(data: dict, article_count: int) -> str:
                        color:#b22222;font-weight:700;">AI TIMES</td>
             <td align="right" style="font-family:Arial,sans-serif;font-size:10px;
                 color:#666;letter-spacing:1px;">
-              POWERED BY CLAUDE AI · GITHUB ACTIONS
+              POWERED BY Daeho AI · feat.Claude
             </td>
           </tr>
           <tr>
@@ -340,10 +381,13 @@ def send_email(data: dict, article_count: int):
     today   = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
     subject = f"🗞️ AI Times Daily | {today} 아침 브리핑"
 
-    articles = data.get("articles", [])
-    plain    = data.get("trend_summary", "") + "\n\n"
-    for a in articles:
-        plain += f"[{a.get('category','')}] {a['title']}\n{a['summary']}\n{a['link']}\n\n"
+    plain = data.get("trend_summary", "") + "\n\n"
+    plain += "=== 🔥 AI 빅이슈 TOP 3 ===\n\n"
+    for a in data.get("big_issues", []):
+        plain += f"TOP {a.get('rank','')} {a['title']}\n{a['summary']}\n{a['link']}\n\n"
+    plain += "=== 🚀 최신 AI 신규기능 ===\n\n"
+    for a in data.get("new_features", []):
+        plain += f"[{a.get('company','')}] {a['title']}\n{a['summary']}\n{a['link']}\n\n"
 
     html = build_html(data, article_count)
 
