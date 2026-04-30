@@ -1,16 +1,16 @@
 import os
 import smtplib
 import feedparser
-import anthropic
+import google.generativeai as genai
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 
 # ── 설정 ──────────────────────────────────────────────
-GMAIL_USER     = os.environ["GMAIL_USER"]
-GMAIL_APP_PW   = os.environ["GMAIL_APP_PW"]
-TO_EMAIL       = os.environ["TO_EMAIL"]
-ANTHROPIC_KEY  = os.environ["ANTHROPIC_API_KEY"]
+GMAIL_USER   = os.environ["GMAIL_USER"]
+GMAIL_APP_PW = os.environ["GMAIL_APP_PW"]
+TO_EMAIL     = os.environ["TO_EMAIL"]
+GEMINI_KEY   = os.environ["GEMINI_API_KEY"]
 
 RSS_FEEDS = [
     ("TechCrunch AI",   "https://techcrunch.com/category/artificial-intelligence/feed/"),
@@ -57,7 +57,7 @@ def fetch_news(hours: int = 12) -> list[dict]:
     return articles[:20]
 
 
-# ── Claude 요약 (구조화된 JSON 형식 요청) ──────────────
+# ── Gemini 요약 (구조화된 JSON 형식 요청) ──────────────
 def summarize_with_claude(articles: list[dict]) -> list[dict]:
     if not articles:
         return []
@@ -71,8 +71,9 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 내용: {a['summary']}
 """
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    today  = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
+    genai.configure(api_key=GEMINI_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    today = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
 
     prompt = f"""
 다음은 {today} 아침 기준 지난 12시간 동안의 AI 관련 뉴스입니다.
@@ -97,15 +98,10 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 {news_text}
 """
 
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=3000,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    response = model.generate_content(prompt)
 
     import json
-    text = response.content[0].text.strip()
-    # JSON 블록만 추출
+    text = response.text.strip()
     if "```" in text:
         text = text.split("```")[1]
         if text.startswith("json"):
