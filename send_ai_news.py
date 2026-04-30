@@ -121,9 +121,16 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 {news_text}
 """
 
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-
-    import json
+    import json, time
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+            break
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"[WARN] Gemini 재시도 {attempt+1}/3: {e}")
+            time.sleep(15)
     text = response.text.strip()
     if "```" in text:
         text = text.split("```")[1]
