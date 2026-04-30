@@ -1,7 +1,7 @@
 import os
 import smtplib
 import feedparser
-import google.generativeai as genai
+from google import genai
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
@@ -71,8 +71,7 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 내용: {a['summary']}
 """
 
-    genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    client = genai.Client(api_key=GEMINI_KEY)
     today = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
 
     prompt = f"""
@@ -98,7 +97,7 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 {news_text}
 """
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
 
     import json
     text = response.text.strip()
