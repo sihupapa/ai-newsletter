@@ -27,4 +27,6 @@ jobs:
           GMAIL_APP_PW:      ${{ secrets.GMAIL_APP_PW }}
           TO_EMAIL:          ${{ secrets.TO_EMAIL }}
           GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          SLACK_BOT_TOKEN:   ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL:     ${{ secrets.SLACK_CHANNEL }}
         run: python send_ai_news.py

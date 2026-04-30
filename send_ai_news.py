@@ -1,16 +1,21 @@
+import io
 import os
 import smtplib
 import feedparser
+import requests
 from google import genai
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
+from PIL import Image, ImageDraw, ImageFont
 
 # ── 설정 ──────────────────────────────────────────────
-GMAIL_USER   = os.environ["GMAIL_USER"]
-GMAIL_APP_PW = os.environ["GMAIL_APP_PW"]
-TO_EMAIL     = os.environ["TO_EMAIL"]
-GEMINI_KEY   = os.environ["GEMINI_API_KEY"]
+GMAIL_USER      = os.environ["GMAIL_USER"]
+GMAIL_APP_PW    = os.environ["GMAIL_APP_PW"]
+TO_EMAIL        = os.environ["TO_EMAIL"]
+GEMINI_KEY      = os.environ["GEMINI_API_KEY"]
+SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+SLACK_CHANNEL   = os.environ["SLACK_CHANNEL"]
 
 RSS_FEEDS = [
     # 주요 AI 언론 (빅이슈 파악용)
@@ -60,7 +65,7 @@ def fetch_news(hours: int = 12) -> list[dict]:
         except Exception as e:
             print(f"[WARN] {source_name} 피드 실패: {e}")
 
-    return articles[:20]
+    return articles[:30]
 
 
 # ── Gemini 요약 (구조화된 JSON 형식 요청) ──────────────
@@ -109,8 +114,8 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 }}
 
 규칙:
-- big_issues: 여러 언론에서 동시에 다루는 AI 빅이슈 상위 3개만 선정
-- new_features: Claude Code, OpenAI, Google Gemini, Meta AI 등 주요 AI 서비스/툴의 신규 기능 발표 기사만 선정 (없으면 빈 배열)
+- big_issues: 여러 언론에서 동시에 다루는 AI 빅이슈 상위 10개 선정
+- new_features: Claude Code, OpenAI, Google Gemini, Meta AI 등 주요 AI 서비스/툴의 신규 기능 발표 기사 최대 10개 선정 (없으면 빈 배열)
 
 뉴스 목록:
 {news_text}
@@ -332,7 +337,7 @@ def build_html(data: dict, article_count: int) -> str:
         <div style="font-family:Arial,sans-serif;font-size:10px;font-weight:700;
                     letter-spacing:2px;color:#b22222;border-bottom:2px solid #b22222;
                     padding-bottom:6px;margin-bottom:20px;">
-          🔥 AI 빅이슈 TOP 3
+          🔥 AI 빅이슈 TOP 10
         </div>
         {big_headline_html}
       </td>
@@ -376,6 +381,134 @@ def build_html(data: dict, article_count: int) -> str:
     return html
 
 
+# ── Slack 이미지 생성 ──────────────────────────────────
+def create_news_image(data: dict, article_count: int) -> bytes:
+    today      = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
+    big_issues = data.get("big_issues", [])
+    trend      = data.get("trend_summary", "")
+
+    items = [{"title": a.get("title",""), "source": a.get("source",""),
+              "link": a.get("link",""),   "summary": a.get("summary","")}
+             for a in big_issues]
+
+    W       = 900
+    HEADER  = 100
+    ITEM_H  = 100
+    TREND_H = 120
+    FOOTER  = 50
+    H = HEADER + ITEM_H * max(len(items), 1) + TREND_H + FOOTER + 20
+
+    img  = Image.new("RGB", (W, H), "#0f0f1a")
+    draw = ImageDraw.Draw(img)
+
+    def font(size, bold=False):
+        candidates = (
+            ["/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+             "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+            if bold else
+            ["/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+        )
+        for p in candidates:
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    f_tiny = font(12); f_sm = font(14); f_md = font(15)
+    f_lg   = font(18, bold=True); f_xl = font(26, bold=True)
+
+    for y in range(HEADER):
+        r = int(178 + (120-178)*y/HEADER)
+        g = int(34  + (20 -34 )*y/HEADER)
+        b = int(34  + (20 -34 )*y/HEADER)
+        draw.line([(0,y),(W,y)], fill=(r,g,b))
+
+    draw.text((28, 16), "AI TIMES  |  빅이슈 TOP 10", font=f_xl, fill="#ffffff")
+    draw.text((30, 60), f"{today}  |  지난 12시간 {article_count}건 수집", font=f_sm, fill="#ffcccc")
+
+    accents = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#3498db",
+               "#9b59b6","#1abc9c","#e91e63","#ff5722","#607d8b"]
+
+    for i, item in enumerate(items):
+        y0  = HEADER + 10 + i * ITEM_H
+        acc = accents[i % len(accents)]
+        ar, ag, ab = int(acc[1:3],16), int(acc[3:5],16), int(acc[5:7],16)
+
+        draw.rounded_rectangle([(16,y0),(W-16,y0+ITEM_H-8)], radius=8, fill="#1a1a2e")
+        draw.rounded_rectangle([(16,y0),(22,  y0+ITEM_H-8)], radius=4, fill=(ar,ag,ab))
+
+        draw.ellipse([(30,y0+10),(50,y0+30)], fill=(ar,ag,ab))
+        draw.text((35,y0+12), str(i+1), font=f_sm, fill="#ffffff")
+
+        title = (item.get("title","") + " " * 40)[:42]
+        draw.text((60,y0+10), title, font=f_lg, fill="#e8e8ff")
+
+        src_txt = f"  {item.get('source','')}  |  {item.get('link','')[:45]}..."
+        draw.text((60,y0+36), src_txt, font=f_tiny, fill="#7777aa")
+
+        s = item.get("summary","")
+        draw.text((60,y0+56), s[:85], font=f_md, fill="#ccccee")
+        if len(s) > 85:
+            draw.text((60,y0+76), s[85:160], font=f_md, fill="#ccccee")
+
+    ty = HEADER + 10 + len(items) * ITEM_H + 8
+    draw.rounded_rectangle([(16,ty),(W-16,ty+TREND_H-8)], radius=8, fill="#1e1e3f")
+    draw.text((30,ty+12), "  TODAY'S AI TREND", font=f_lg, fill="#f0c040")
+    t = trend
+    draw.text((30,ty+42), t[:90],  font=f_md, fill="#ddddff")
+    if len(t) > 90:
+        draw.text((30,ty+64), t[90:175], font=f_md, fill="#ddddff")
+
+    fy = ty + TREND_H + 4
+    draw.text((30,fy+14), "Powered by Daeho AI · feat.Claude  |  Every day 08:00 KST",
+              font=f_tiny, fill="#444466")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+# ── Slack 이미지 발송 ──────────────────────────────────
+def send_slack_image(image_bytes: bytes, article_count: int):
+    today   = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+
+    r1 = requests.post(
+        "https://slack.com/api/files.getUploadURLExternal",
+        headers=headers,
+        data={
+            "filename": f"ai_news_{datetime.now(tz=KST).strftime('%Y%m%d')}.png",
+            "length":   len(image_bytes),
+        },
+    )
+    d1 = r1.json()
+    if not d1.get("ok"):
+        raise RuntimeError(f"Slack getUploadURL 실패: {d1.get('error')}")
+
+    requests.post(d1["upload_url"], data=image_bytes,
+                  headers={"Content-Type": "image/png"}).raise_for_status()
+
+    r3 = requests.post(
+        "https://slack.com/api/files.completeUploadExternal",
+        headers=headers,
+        json={
+            "files":           [{"id": d1["file_id"],
+                                 "title": f"AI 뉴스 브리핑 | {today}"}],
+            "channel_id":      SLACK_CHANNEL,
+            "initial_comment": f"*AI Times Daily | {today}*\n지난 12시간 AI 뉴스 {article_count}건 요약 🔥",
+        },
+    )
+    d3 = r3.json()
+    if not d3.get("ok"):
+        raise RuntimeError(f"Slack completeUpload 실패: {d3.get('error')}")
+
+    print(f"✅ Slack 이미지 발송 완료 → {SLACK_CHANNEL}")
+
+
 # ── Gmail 발송 ─────────────────────────────────────────
 def send_email(data: dict, article_count: int):
     today   = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
@@ -413,6 +546,12 @@ if __name__ == "__main__":
 
     print("🧠 Claude로 요약 중...")
     data = summarize_with_claude(articles)
+
+    print("🖼️ Slack 이미지 생성 중...")
+    image_bytes = create_news_image(data, len(articles))
+
+    print("💬 Slack 발송 중...")
+    send_slack_image(image_bytes, len(articles))
 
     print("📧 Gmail 발송 중...")
     send_email(data, len(articles))
