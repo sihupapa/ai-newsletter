@@ -1,4 +1,3 @@
-import io
 import os
 import smtplib
 import feedparser
@@ -7,7 +6,6 @@ from google import genai
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
-from PIL import Image, ImageDraw, ImageFont
 
 # ── 설정 ──────────────────────────────────────────────
 GMAIL_USER      = os.environ["GMAIL_USER"]
@@ -394,132 +392,68 @@ def build_html(data: dict, article_count: int) -> str:
     return html
 
 
-# ── Slack 이미지 생성 ──────────────────────────────────
-def create_news_image(data: dict, article_count: int) -> bytes:
-    today      = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
-    big_issues = data.get("big_issues", [])
-    trend      = data.get("trend_summary", "")
+# ── Slack Block Kit 발송 ───────────────────────────────
+def send_slack_message(data: dict, article_count: int):
+    today       = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
+    trend       = data.get("trend_summary", "")
+    big_issues  = data.get("big_issues", [])
+    new_features= data.get("new_features", [])
 
-    items = [{"title": a.get("title",""), "source": a.get("source",""),
-              "link": a.get("link",""),   "summary": a.get("summary","")}
-             for a in big_issues]
+    blocks = [
+        # 헤더
+        {"type": "header", "text": {"type": "plain_text", "text": f"🗞️ AI Times Daily  |  {today}"}},
+        {"type": "context", "elements": [{"type": "mrkdwn",
+            "text": f"지난 12시간 뉴스 *{article_count}건* 수집  |  매일 오전 8시 KST  |  Powered by Daeho AI · feat.Claude"}]},
+        {"type": "divider"},
 
-    W       = 900
-    HEADER  = 100
-    ITEM_H  = 100
-    TREND_H = 120
-    FOOTER  = 50
-    H = HEADER + ITEM_H * max(len(items), 1) + TREND_H + FOOTER + 20
+        # 트렌드
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"📊 *TODAY'S TREND*\n{trend}"}},
+        {"type": "divider"},
 
-    img  = Image.new("RGB", (W, H), "#0f0f1a")
-    draw = ImageDraw.Draw(img)
+        # 빅이슈 헤더
+        {"type": "header", "text": {"type": "plain_text", "text": "🔥 AI 빅이슈 TOP 10"}},
+    ]
 
-    def font(size, bold=False):
-        candidates = (
-            ["/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
-             "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
-            if bold else
-            ["/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
-        )
-        for p in candidates:
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                pass
-        return ImageFont.load_default()
+    for a in big_issues:
+        rank    = a.get("rank", "")
+        title   = a.get("title", "")
+        link    = a.get("link", "")
+        summary = a.get("summary", "")
+        source  = a.get("source", "")
+        pub     = a.get("pub", "")
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn",
+                     "text": f"*{rank}.  <{link}|{title}>*\n{summary}\n_{source}  ·  {pub}_"}
+        })
+        blocks.append({"type": "divider"})
 
-    f_tiny = font(12); f_sm = font(14); f_md = font(15)
-    f_lg   = font(18, bold=True); f_xl = font(26, bold=True)
+    if new_features:
+        blocks.append({"type": "header", "text": {"type": "plain_text", "text": "🚀 최신 AI 신규기능"}})
+        for a in new_features:
+            company = a.get("company", "AI")
+            title   = a.get("title", "")
+            link    = a.get("link", "")
+            summary = a.get("summary", "")
+            source  = a.get("source", "")
+            pub     = a.get("pub", "")
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn",
+                         "text": f"*[{company}]  <{link}|{title}>*\n{summary}\n_{source}  ·  {pub}_"}
+            })
+            blocks.append({"type": "divider"})
 
-    for y in range(HEADER):
-        r = int(178 + (120-178)*y/HEADER)
-        g = int(34  + (20 -34 )*y/HEADER)
-        b = int(34  + (20 -34 )*y/HEADER)
-        draw.line([(0,y),(W,y)], fill=(r,g,b))
+    resp = requests.post(
+        "https://slack.com/api/chat.postMessage",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+        json={"channel": SLACK_CHANNEL, "blocks": blocks, "text": f"AI Times Daily | {today}"},
+    ).json()
 
-    draw.text((28, 16), "AI TIMES  |  빅이슈 TOP 10", font=f_xl, fill="#ffffff")
-    draw.text((30, 60), f"{today}  |  지난 12시간 {article_count}건 수집", font=f_sm, fill="#ffcccc")
+    if not resp.get("ok"):
+        raise RuntimeError(f"Slack 발송 실패: {resp.get('error')}")
 
-    accents = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#3498db",
-               "#9b59b6","#1abc9c","#e91e63","#ff5722","#607d8b"]
-
-    for i, item in enumerate(items):
-        y0  = HEADER + 10 + i * ITEM_H
-        acc = accents[i % len(accents)]
-        ar, ag, ab = int(acc[1:3],16), int(acc[3:5],16), int(acc[5:7],16)
-
-        draw.rounded_rectangle([(16,y0),(W-16,y0+ITEM_H-8)], radius=8, fill="#1a1a2e")
-        draw.rounded_rectangle([(16,y0),(22,  y0+ITEM_H-8)], radius=4, fill=(ar,ag,ab))
-
-        draw.ellipse([(30,y0+10),(50,y0+30)], fill=(ar,ag,ab))
-        draw.text((35,y0+12), str(i+1), font=f_sm, fill="#ffffff")
-
-        title = (item.get("title","") + " " * 40)[:42]
-        draw.text((60,y0+10), title, font=f_lg, fill="#e8e8ff")
-
-        src_txt = f"  {item.get('source','')}  |  {item.get('link','')[:45]}..."
-        draw.text((60,y0+36), src_txt, font=f_tiny, fill="#7777aa")
-
-        s = item.get("summary","")
-        draw.text((60,y0+56), s[:85], font=f_md, fill="#ccccee")
-        if len(s) > 85:
-            draw.text((60,y0+76), s[85:160], font=f_md, fill="#ccccee")
-
-    ty = HEADER + 10 + len(items) * ITEM_H + 8
-    draw.rounded_rectangle([(16,ty),(W-16,ty+TREND_H-8)], radius=8, fill="#1e1e3f")
-    draw.text((30,ty+12), "  TODAY'S AI TREND", font=f_lg, fill="#f0c040")
-    t = trend
-    draw.text((30,ty+42), t[:90],  font=f_md, fill="#ddddff")
-    if len(t) > 90:
-        draw.text((30,ty+64), t[90:175], font=f_md, fill="#ddddff")
-
-    fy = ty + TREND_H + 4
-    draw.text((30,fy+14), "Powered by Daeho AI · feat.Claude  |  Every day 08:00 KST",
-              font=f_tiny, fill="#444466")
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
-
-
-# ── Slack 이미지 발송 ──────────────────────────────────
-def send_slack_image(image_bytes: bytes, article_count: int):
-    today   = datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
-    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
-
-    r1 = requests.post(
-        "https://slack.com/api/files.getUploadURLExternal",
-        headers=headers,
-        data={
-            "filename": f"ai_news_{datetime.now(tz=KST).strftime('%Y%m%d')}.png",
-            "length":   len(image_bytes),
-        },
-    )
-    d1 = r1.json()
-    if not d1.get("ok"):
-        raise RuntimeError(f"Slack getUploadURL 실패: {d1.get('error')}")
-
-    requests.post(d1["upload_url"], data=image_bytes,
-                  headers={"Content-Type": "image/png"}).raise_for_status()
-
-    r3 = requests.post(
-        "https://slack.com/api/files.completeUploadExternal",
-        headers=headers,
-        json={
-            "files":           [{"id": d1["file_id"],
-                                 "title": f"AI 뉴스 브리핑 | {today}"}],
-            "channel_id":      SLACK_CHANNEL,
-            "initial_comment": f"*AI Times Daily | {today}*\n지난 12시간 AI 뉴스 {article_count}건 요약 🔥",
-        },
-    )
-    d3 = r3.json()
-    if not d3.get("ok"):
-        raise RuntimeError(f"Slack completeUpload 실패: {d3.get('error')}")
-
-    print(f"✅ Slack 이미지 발송 완료 → {SLACK_CHANNEL}")
+    print(f"✅ Slack Block Kit 발송 완료 → {SLACK_CHANNEL}")
 
 
 # ── Gmail 발송 ─────────────────────────────────────────
@@ -560,11 +494,8 @@ if __name__ == "__main__":
     print("🧠 Claude로 요약 중...")
     data = summarize_with_claude(articles)
 
-    print("🖼️ Slack 이미지 생성 중...")
-    image_bytes = create_news_image(data, len(articles))
-
     print("💬 Slack 발송 중...")
-    send_slack_image(image_bytes, len(articles))
+    send_slack_message(data, len(articles))
 
     print("📧 Gmail 발송 중...")
     send_email(data, len(articles))
