@@ -97,7 +97,7 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 {news_text}
 """
 
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+    response = client.models.generate_content(model="gemini-2.5-flash-preview-04-17", contents=prompt)
 
     import json
     text = response.text.strip()
