@@ -122,15 +122,21 @@ def summarize_with_claude(articles: list[dict]) -> list[dict]:
 """
 
     import json, time
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]
+    response = None
+    for model in models:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(model=model, contents=prompt)
+                print(f"✅ 모델 사용: {model}")
+                break
+            except Exception as e:
+                print(f"[WARN] {model} 시도 {attempt+1}/2 실패: {e}")
+                time.sleep(10)
+        if response:
             break
-        except Exception as e:
-            if attempt == 2:
-                raise
-            print(f"[WARN] Gemini 재시도 {attempt+1}/3: {e}")
-            time.sleep(15)
+    if not response:
+        raise RuntimeError("모든 Gemini 모델 호출 실패")
     text = response.text.strip()
     if "```" in text:
         text = text.split("```")[1]
